@@ -10,6 +10,8 @@ import (
 )
 
 type Connection struct {
+	//当前Conn属于哪个Server
+	TcpServer ziface.IServer //当前conn属于哪个server，在conn初始化的时候添加即可
 	//当前连接的socket TCP套接字
 	Conn *net.TCPConn
 	//当前连接的ID 也可以称作为SessionID，ID全局唯一
@@ -27,16 +29,20 @@ type Connection struct {
 }
 
 //创建连接的方法
-func NewConntion(conn *net.TCPConn, connID uint32, msgHandler ziface.IMsgHandle) *Connection {
+func NewConntion(server ziface.IServer, conn *net.TCPConn, connID uint32, msgHandler ziface.IMsgHandle) *Connection {
+	//初始化Conn属性
 	c := &Connection{
+		TcpServer:    server, //将隶属的server传递进来
 		Conn:         conn,
 		ConnID:       connID,
 		isClosed:     false,
 		MsgHandler:   msgHandler,
 		ExitBuffChan: make(chan bool, 1),
-		msgChan:      make(chan []byte), //msgChan初始化
+		msgChan:      make(chan []byte),
 	}
 
+	//将新创建的Conn添加到链接管理中
+	c.TcpServer.GetConnMgr().Add(c) //将当前新创建的连接添加到ConnManager中
 	return c
 }
 
@@ -112,19 +118,20 @@ func (c *Connection) Start() {
 
 //停止连接，结束当前连接状态M
 func (c *Connection) Stop() {
-	//1. 如果当前链接已经关闭
+	fmt.Println("Conn Stop()...ConnID = ", c.ConnID)
+	//如果当前链接已经关闭
 	if c.isClosed == true {
 		return
 	}
 	c.isClosed = true
 
-	//TODO Connection Stop() 如果用户注册了该链接的关闭回调业务，那么在此刻应该显示调用
-
 	// 关闭socket链接
 	c.Conn.Close()
-
-	//通知从缓冲队列读数据的业务，该链接已经关闭
+	//关闭Writer Goroutine
 	c.ExitBuffChan <- true
+
+	//将链接从连接管理器中删除
+	c.TcpServer.GetConnMgr().Remove(c) //删除conn从ConnManager中
 
 	//关闭该链接全部管道
 	close(c.ExitBuffChan)
